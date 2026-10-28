@@ -1,0 +1,307 @@
+import csv
+import os
+from collections import deque
+from datetime import datetime
+
+# All file paths are built from this file's location, so the project can run
+# from any folder after extracting the ZIP.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+MENU_FILE = os.path.join(DATA_DIR, "canteen_menu.csv")
+ORDERS_FILE = os.path.join(DATA_DIR, "orders.csv")
+
+
+class MenuItem:
+    def __init__(self, item_id, name, category, price, available=True):
+        self.item_id = int(item_id)
+        self.name = name
+        self.category = category
+        self.price = float(price)
+        self.available = str(available).strip().lower() in ("true", "yes", "1")
+
+    def __str__(self):
+        status = "Available" if self.available else "Unavailable"
+        return f"{self.item_id:<5} {self.name:<24} {self.category:<16} Rs.{self.price:>7.2f}  {status}"
+
+
+class Person:
+    def __init__(self, name):
+        self.name = name.strip()
+
+
+class Student(Person):
+    # Inheritance: Student reuses Person's name attribute.
+    def __init__(self, name, student_id):
+        super().__init__(name)
+        self.student_id = student_id.strip()
+
+
+class Order:
+    def __init__(self, order_id, student, item, quantity):
+        self.order_id = int(order_id)
+        self.student = student
+        self.item = item
+        self.quantity = int(quantity)
+        self.status = "Pending"
+        self.created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    @property
+    def total(self):
+        return self.item.price * self.quantity
+
+    def __str__(self):
+        return (f"Order #{self.order_id} | {self.student.name} ({self.student.student_id}) | "
+                f"{self.item.name} x {self.quantity} | Rs.{self.total:.2f} | {self.status}")
+
+
+class OrderQueue:
+    """Queue (FIFO): the first order placed is the first order served."""
+    def __init__(self):
+        self._items = deque()
+
+    def enqueue(self, order):
+        self._items.append(order)
+
+    def dequeue(self):
+        return self._items.popleft() if self._items else None
+
+    def items(self):
+        return list(self._items)
+
+
+class ActionStack:
+    """Stack (LIFO): remembers orders placed during this session."""
+    def __init__(self):
+        self._items = []
+
+    def push(self, order):
+        self._items.append(order)
+
+    def pop(self):
+        return self._items.pop() if self._items else None
+
+
+class CanteenSystem:
+    def __init__(self):
+        self.menu = []
+        self.menu_by_id = {}       # Hash map / dictionary
+        self.order_queue = OrderQueue()
+        self.action_stack = ActionStack()
+        self.all_orders = []
+        self.next_order_id = 1
+        self.load_menu()
+        self.load_orders()
+
+    def load_menu(self):
+        if not os.path.isfile(MENU_FILE):
+            raise FileNotFoundError(
+                "Dataset not found. Please extract the complete ZIP, including the data folder."
+            )
+        with open(MENU_FILE, newline="", encoding="utf-8-sig") as file:
+            for row in csv.DictReader(file):
+                item = MenuItem(row["item_id"], row["name"], row["category"],
+                                row["price"], row.get("available", "True"))
+                self.menu.append(item)
+                self.menu_by_id[item.item_id] = item
+
+    def load_orders(self):
+        if not os.path.isfile(ORDERS_FILE):
+            return
+        with open(ORDERS_FILE, newline="", encoding="utf-8-sig") as file:
+            for row in csv.DictReader(file):
+                item = self.menu_by_id.get(int(row["item_id"]))
+                if item is None:
+                    continue
+                student = Student(row["student_name"], row["student_id"])
+                order = Order(row["order_id"], student, item, row["quantity"])
+                order.status = row["status"]
+                order.created_at = row["created_at"]
+                self.all_orders.append(order)
+                self.next_order_id = max(self.next_order_id, order.order_id + 1)
+                if order.status == "Pending":
+                    self.order_queue.enqueue(order)
+
+    def save_orders(self):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        fields = ["order_id", "student_name", "student_id", "item_id",
+                  "item_name", "quantity", "total", "status", "created_at"]
+        with open(ORDERS_FILE, "w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=fields)
+            writer.writeheader()
+            for order in self.all_orders:
+                writer.writerow({
+                    "order_id": order.order_id,
+                    "student_name": order.student.name,
+                    "student_id": order.student.student_id,
+                    "item_id": order.item.item_id,
+                    "item_name": order.item.name,
+                    "quantity": order.quantity,
+                    "total": f"{order.total:.2f}",
+                    "status": order.status,
+                    "created_at": order.created_at,
+                })
+
+    def show_menu(self, items=None):
+        items = self.menu if items is None else items
+        print("\n" + "-" * 78)
+        print(f"{'ID':<5} {'Food item':<24} {'Category':<16} {'Price':>10}  Status")
+        print("-" * 78)
+        for item in items:
+            print(item)
+        print("-" * 78)
+
+    def linear_search(self, keyword):
+        keyword = keyword.casefold().strip()
+        return [item for item in self.menu
+                if keyword in item.name.casefold() or keyword in item.category.casefold()]
+
+    def merge_sort_by_price(self, items):
+        if len(items) <= 1:
+            return items[:]
+        mid = len(items) // 2
+        left = self.merge_sort_by_price(items[:mid])
+        right = self.merge_sort_by_price(items[mid:])
+        result, i, j = [], 0, 0
+        while i < len(left) and j < len(right):
+            if left[i].price <= right[j].price:
+                result.append(left[i])
+                i += 1
+            else:
+                result.append(right[j])
+                j += 1
+        return result + left[i:] + right[j:]
+
+    def place_order(self):
+        self.show_menu()
+        try:
+            item_id = int(input("Enter food item ID: ").strip())
+            item = self.menu_by_id.get(item_id)
+            if item is None:
+                print("Invalid item ID.")
+                return
+            if not item.available:
+                print("This item is currently unavailable.")
+                return
+            quantity = int(input("Enter quantity: ").strip())
+            if quantity <= 0:
+                print("Quantity must be at least 1.")
+                return
+            name = input("Enter student name: ").strip()
+            student_id = input("Enter student/roll number: ").strip()
+            if not name or not student_id:
+                print("Student name and roll number cannot be empty.")
+                return
+            order = Order(self.next_order_id, Student(name, student_id), item, quantity)
+            self.next_order_id += 1
+            self.all_orders.append(order)
+            self.order_queue.enqueue(order)
+            self.action_stack.push(order)
+            self.save_orders()
+            print("\nOrder placed successfully!")
+            print(order)
+        except ValueError:
+            print("Please enter valid numeric values for item ID and quantity.")
+
+    def show_pending_orders(self):
+        pending = self.order_queue.items()
+        if not pending:
+            print("\nNo pending orders.")
+            return
+        print("\nPENDING ORDERS (Queue - FIFO)")
+        for order in pending:
+            print(order)
+
+    def serve_next_order(self):
+        order = self.order_queue.dequeue()
+        if order is None:
+            print("\nNo pending orders to serve.")
+            return
+        order.status = "Served"
+        self.save_orders()
+        print("\nOrder served:")
+        print(order)
+
+    def cancel_latest_order(self):
+        order = self.action_stack.pop()
+        if order is None:
+            print("\nNo order from this session is available to cancel.")
+            return
+        if order.status != "Pending":
+            print("The latest order is not pending; it cannot be cancelled.")
+            return
+        order.status = "Cancelled"
+        self.order_queue = OrderQueue()
+        for old_order in self.all_orders:
+            if old_order.status == "Pending":
+                self.order_queue.enqueue(old_order)
+        self.save_orders()
+        print(f"\nOrder #{order.order_id} cancelled.")
+
+    def search_menu(self):
+        keyword = input("Search food name or category: ").strip()
+        results = self.linear_search(keyword)
+        if results:
+            print("\nSearch results (Linear Search):")
+            self.show_menu(results)
+        else:
+            print("No matching food item found.")
+
+    def show_sorted_menu(self):
+        print("\nMENU SORTED BY PRICE (Merge Sort)")
+        self.show_menu(self.merge_sort_by_price(self.menu))
+
+    def show_order_history(self):
+        if not self.all_orders:
+            print("\nNo orders have been placed yet.")
+            return
+        print("\nORDER HISTORY")
+        for order in self.all_orders:
+            print(order)
+
+    def run(self):
+        print("=" * 48)
+        print("       COLLEGE CANTEEN ORDER SYSTEM")
+        print("       DSA + OOP + CSV DATASET")
+        print("=" * 48)
+        while True:
+            print("""
+1. View food menu
+2. Search food (Linear Search)
+3. Sort menu by price (Merge Sort)
+4. Place order
+5. View pending orders (Queue)
+6. Serve next order (FIFO)
+7. Cancel latest order (Stack)
+8. View order history
+9. Exit
+""")
+            choice = input("Choose an option (1-9): ").strip()
+            if choice == "1":
+                self.show_menu()
+            elif choice == "2":
+                self.search_menu()
+            elif choice == "3":
+                self.show_sorted_menu()
+            elif choice == "4":
+                self.place_order()
+            elif choice == "5":
+                self.show_pending_orders()
+            elif choice == "6":
+                self.serve_next_order()
+            elif choice == "7":
+                self.cancel_latest_order()
+            elif choice == "8":
+                self.show_order_history()
+            elif choice == "9":
+                print("Thank you for using the College Canteen Order System!")
+                break
+            else:
+                print("Invalid choice. Please enter a number from 1 to 9.")
+
+
+if __name__ == "__main__":
+    try:
+        CanteenSystem().run()
+    except (OSError, csv.Error, KeyError) as error:
+        print(f"\nCould not start the project: {error}")
+        print("Make sure you extracted the entire ZIP, including data/canteen_menu.csv.")
